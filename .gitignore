@@ -1,0 +1,17 @@
+# Build & IDE
+target/
+out/
+.idea/
+*.iml
+.DS_Store
+
+# Large datasets & checker generated files
+**/checker/input/articles/
+**/checker/output/
+*.json
+*.zip
+*.log
+
+# Generated output files
+*.txt
+!checker/input/**/*.txt
