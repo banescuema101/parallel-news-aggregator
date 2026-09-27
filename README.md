@@ -90,7 +90,7 @@ The engine was benchmarked on multi-threaded workloads processing raw multilingu
 - **Large-Scale Corpus (`test_5`):** **10,000+ distinct JSON articles** (~300 MB corpus) processed concurrently across worker thread pools.
 
 * **Source:** Derived from the [Webhose / Webz.io Free News Dataset](https://github.com/Webhose/free-news-datasets).
-* **Benchmark Target:** Evaluated using the largest test fixture (`test_5`, ~460 KB across input/articles files) to measure real-world I/O throughput and thread contention over representative payloads.
+* **Benchmark Target:** Evaluated using the largest test fixture to measure real-world I/O throughput and thread contention over representative payloads.
 ---
 
 ### 2. Empirical Benchmark Results
