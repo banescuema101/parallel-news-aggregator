@@ -112,13 +112,14 @@ Each thread count $P \in \{1, \dots, 10, 20\}$ was evaluated across 3 consecutiv
 ### 3. Graphical Performance Evaluation
 
 #### Execution Time Profile
-![Execution Time vs. Number of Threads](execution_time.png)
+![Execution Time vs. Number of Threads](src/main/java/tema/apd/execution_time.png)
 
 #### Speedup Scaling
-![Speedup vs. Number of Threads](speedup.png)
+![Speedup vs. Number of Threads](src/main/java/tema/apd/speedup.png)
 
 #### Parallel Efficiency Curve
-![Efficiency vs. Number of Threads](efficiency.png)
+![Efficiency vs. Number of Threads](src/main/java/tema/apd/efficiency.png)
+
 
 ---
 
