@@ -13,8 +13,8 @@ import java.util.concurrent.CyclicBarrier;
 
 
 /**
- * Comparator - compararea a doua articole lexicografic pe sirurile published, apoi
- * in caz de egalitate, pe uuid (cum este specificat si in enunt)
+ * Comparator - compares two articles lexicographically by published date strings,
+ * and in case of equality, by uuid (as specified in the requirements)
  */
 class MyComparator implements Comparator<Article> {
 	@Override
@@ -23,7 +23,7 @@ class MyComparator implements Comparator<Article> {
 		if (rez != 0) {
 			return rez;
 		}
-		// egalitate - sortare crescătoare după uuid
+		// tie-breaker - ascending lexicographical sort by uuid
 		return art1.getUuid().compareTo(art2.getUuid());
 	}
 }
@@ -37,7 +37,7 @@ class MyComparatorKewords implements Comparator<Map.Entry<String, Integer>> {
 		} else if (cmpVal < 0) {
 			return 1;
 		} else {
-			// aici ma uit lexicografic, dupa cheie:
+			// tie-breaker: sort lexicographically by key
 			return t1.getKey().compareTo(t2.getKey());
 		}
 	}
@@ -45,53 +45,48 @@ class MyComparatorKewords implements Comparator<Map.Entry<String, Integer>> {
 
 
 public class Tema1 {
-	// variabile GLOBALE tuturor threadurilor, unde ele colaborativ, vor pune rezultatele locale ce maximizeaza
-	// rezultatul global, apoi threadul cu id 0 va face merge in aceste variabile globale.
+	// Global variables across all worker threads where local results that maximize
+	// global metrics are merged - thread 0 merges and finalizes them.
 	public static String nameBestAuthor;
 	public static String topLanguage;
-	public static String topCategory; // categoria TOP, cea mai populara
+	public static String topCategory; // The most popular (TOP) category
 	static String topKeyWord;
 	public static int bestAuthorCount;
 	public static int topLanguageCount;
-	public static int topCategoryCount; // nr de articole aferent categoriei TOP, cea mai populara
+	public static int topCategoryCount; // number of articles matching the TOP category
 	public static int topKeyWordCount;
 
-	// mapari GLOBALE categorie -> nr Articole cu acea categorie
+	// Global mappings: Category -> Article count for that category
 	static ConcurrentHashMap<String, Integer> mapCatCounts = new ConcurrentHashMap<>();
 	static ConcurrentHashMap<String, Integer> mapLangCounts = new ConcurrentHashMap<>();
 
-	// pentru eliminarea duplicatelor:
+	// Article collections used for duplicate removal.
 	static List<Article> allArticles = Collections.synchronizedList(new ArrayList<>());
 	static List<Article> uniqueArticles = Collections.synchronizedList(new ArrayList<>());
 
-	// fiecare thread are si el un uuidFreq si titlesFreq local, si dupa ce termina in range-ul aferent, local,
-	// de calculat, va face o operatie de .merge() pe aceste doua ConcurrentHashMaps. Din cate am aflat,
-	// merge este o operatie care are loc in mod atomic, cu niste mecanisme interne de locking la nivel de bucket.
-	// (ar fi fost o problema daca 2 sau mai multe threaduri ar fi incercat sa scrie in acelasi bucket in acelasi timp..
-	// de asta am optat pentru ConcurrentHashMap
+	// Each thread tracks local uuidFreq and titlesFreq, and merges them into
+	// these ConcurrentHashMaps via .merge() once their assigned range finishes.
+	// The merge operation executes atomically using bucket-level locks to prevent data races.
 	static ConcurrentHashMap<String, Integer> uuidFreq = new ConcurrentHashMap<>();
 	static ConcurrentHashMap<String, Integer> titlesFreq = new ConcurrentHashMap<>();
 
 
 	static List<String> jsonFilesStrings;
-	// pentru rapoarte:
-	// autor -> nr Articole scrise
+	// Aggregation maps: Author -> Article count
 	static ConcurrentHashMap<String, Integer> mapAuthorNr = new ConcurrentHashMap<>();
-	// unde tin cuvintele de interes -> si frecventa de aparitie.
+	// Inverted index for keywords of interest -> distinct article occurrence frequency
 	final static ConcurrentHashMap<String, Integer> keywordCount = new ConcurrentHashMap<>();
 
-	// pentru fisierele pe limbi
+	// Article mappings: Language -> List of Article UUIDs
 	static ConcurrentHashMap<String, List<String>> mapLimbiIndices = new ConcurrentHashMap<>();
-	// pentru fisierele pe categorii.
+	// Article mappings: Category -> List of Article UUIDs
 	static ConcurrentHashMap<String, List<String>> mapCatIndices = new ConcurrentHashMap<>();
 
-	// variabila locala unde voi retine CEL MAI RECENT ARTICOL.
+	// Shared reference to track the most recently published article
 	static Article mostRecentArticle = null;
 	final static Object mostRecentArticleLock = new Object();
 
-	// !! Pentru ca ma trezisem cu diferente la contorizari intre fisierele de output generate de cheker
-	// vs referintele -> si mi-am dat seama ca omisesm sa verific si validitatea limbilor / categoriilor !!
-	// le preiau din parsarea inputs.txt
+	// Sets used to validate languages, categories and linking words loaded from inputs.txt
 	static Set<String> setLanguages;
 	static Set<String> setCategories;
 	static Set<String> setlinkingWords;
@@ -106,21 +101,20 @@ public class Tema1 {
 		String articlesTxt = args[1];
 		String inputsTxt = args[2];
 
-		// imi memorez lista de String-uri
+		// Parse file paths and filter lists on the main thread
 		jsonFilesStrings = parsareFileNamesArticles(articlesTxt);
 		citireFisierInputs(inputsTxt);
 
 		barrier = new CyclicBarrier(nrThreads);
 
-		// pornesc cele nrThreads threaduri (la fiecare obiect de tipul Thread parsez id-ul i si numarul de Threaduri
-		// care e P - notat in MyThread asa)
+		// Spawn the fixed set of worker threads with their respective IDs and total count P
 		for (int i = 0; i < nrThreads; i++) {
 			threads[i] = new Thread(new MyThread(i, nrThreads));
 			threads[i].start();
 		}
 
-		// la final fac join, adica le contopesc inapoi in threadul Main principal, apoi inchei si programul Main.
-		// Threadul cu id-ul 0 va afisa statisticile, apeland metoda @scriereRezultate din Main
+		// Await thread completion, join back into the main thread, and finish execution
+		// Thread 0 writes the final aggregated reports via scriereRezultate()
 		for (int i = 0; i < nrThreads; i++) {
 			try {
 				threads[i].join();
@@ -130,32 +124,30 @@ public class Tema1 {
 		}
 	}
 
-	// citirea efectiva a json-urilor se intampla in metoda run() a fiecarui thread. Aici doar imi fac lista
-	// cu toate denumirile din fisierul articles.txt, ca dupa sa le distribui cu range-uri fiecarui thread,
-	// si ele sa preia efectiv json-urile.
+	// Article JSON parsing takes place inside each thread's run() method
+	// Here we collect all article file paths from articles.txt to distribute ranges to each thread
 
 	static List<String> parsareFileNamesArticles(String path) throws Exception {
-		// lista de nume de fisiere din articles.txt.
+		// List of article filenames from articles.txt
 		List<String> files = new ArrayList<>();
 		File fileArticles = new File(path);
 		String parentDir = fileArticles.getParent();
 
 		BufferedReader br = new BufferedReader(new FileReader(path));
-		// pe prima linie am numarul de fisiere.
+		// The first line contains the total number of files
 		String line = br.readLine();
 		int n = Integer.parseInt(line.trim());
 
-		// aici dadea eroare altfel. Am fost nevoita sa ma raportez la parintele fisierului si
-		// la calea relativa, nu doar la cea relativa.
+		// Resolve paths relative to parent directory if applicable
 		for (int i = 0; i < n; i++) {
 			String relativePath = br.readLine();
 
 			File realPath;
 			if (parentDir == null) {
-				// daca aici sunt cu sursele, inseamna ca nu e relativ la alt director, in afara de acesta.
+				// In current directory; path is already direct
 				realPath = new File(relativePath);
 			} else {
-				// in acest caz fisierul are o succesiune de posibile folderuri. (care il precede)
+				// File path is preceded by parent directory structure
 				realPath = new File(parentDir, relativePath);
 			}
 			files.add(realPath.getPath());
@@ -165,8 +157,8 @@ public class Tema1 {
 	}
 
 
-	// chiar daca stiu ca limbile/categoriile din acele fisiere din inputs.txt
-	// sunt unice (din exemple), o sa le memorez in seturi, pentru ca nu ma intereseaza ordinea.
+	// Loads elements into a concurrent set to achieve O(1) membership lookups,
+	// ignoring ordering.
 	static Set<String> creeazaSet(String file) throws Exception{
 		BufferedReader br = new BufferedReader(new FileReader(file));
 		int n = Integer.parseInt(br.readLine().trim());
@@ -180,32 +172,29 @@ public class Tema1 {
 	}
 
 
-	// aici ma ocup sa pun in seturile de categorii, labnguages si linkingWords, continutul fisierelor
-	// din cadrul inputs.txt
-	// adica am citit ce contine inputs.txt:
+	// Parses categories, languages, and linking words paths listed inside inputs.txt:
+	// e.g.:
 	// ../../files/languages.txt
-	//../../files/categories.txt
-	//../../files/english_linking_words.txt
-
-	// Le-am deschis pe fiecare, si apoi am citit rand cu rand, adaugand in seturi.
-	// Atunci cand voi cauta, look-up urile vor fi mult mai rapide in O(1), nu ma intereseaza ordinea,
-	// ma ajuta doar in a verifica daca o categorie este VALIDA sau o ignor, in MyThreads (similar si setul pt limbi
-	// si pentru linking words.
+	// ../../files/categories.txt
+	// ../../files/english_linking_words.txt
+	//
+	// Each target file is read line-by-line and stored into sets.
+	// Provides O(1) lookups in worker threads to validate categories, languages, and linking words
 	static void citireFisierInputs(String inputsFileTxt) throws Exception{
 		File fileInput = new File(inputsFileTxt);
 		String parentDir = fileInput.getParent();
 		BufferedReader br = new BufferedReader(new FileReader(fileInput));
 
-		br.readLine(); // consum numarul de pe prima linie
+		br.readLine(); // Consume item count header
 		String pathLangFile = br.readLine().trim();
 		String pathCatFile = br.readLine().trim();
 		String pathWordsFile = br.readLine().trim();
 
-		// si creez calea corecta -> parinte + calea relativa
+		// Resolve absolute/complete paths using parent directory
 		File completeLangFilePath;
 		File completeCatFilePath;
 		File completeWordsFilePath;
-		// acelasi lucru, crearea caii absolute.
+
 		if (parentDir != null) {
 			completeLangFilePath = new File(parentDir + File.separator + pathLangFile);
 			completeCatFilePath = new File(parentDir + File.separator + pathCatFile);
@@ -216,14 +205,14 @@ public class Tema1 {
 			completeWordsFilePath = new File(pathWordsFile);
 		}
 
-		// seturile
+		// Populate lookup sets
 		setLanguages = creeazaSet(completeLangFilePath.getPath());
 		setCategories = creeazaSet(completeCatFilePath.getPath());
 		setlinkingWords = creeazaSet(completeWordsFilePath.getPath());
 
 		Set<String> cleanedWords = ConcurrentHashMap.newKeySet();
 		for (String w : setlinkingWords) {
-			// le transform in litere mici, apoi elimin ceea ce nu este litera!
+			// Normalize to lowercase and strip all non-letter characters
 			w = w.toLowerCase().replaceAll("[^a-z]", "");
 			cleanedWords.add(w);
 		}
@@ -232,10 +221,8 @@ public class Tema1 {
 	}
 
 	static void scriereRezultate() throws Exception {
-		// articolele mele !unice!
+		// Sort unique articles chronologically descending, falling back to UUID lexicographical order
 		uniqueArticles.sort(new tema.apd.MyComparator());
-		// le-am sortat cu comparatorul care imi compara dupa published 2 articole, iar apoi in caz de egalitate la timestamp
-		// dupa uuid lexicografic.
 		PrintWriter pw = new PrintWriter("all_articles.txt");
 
 		for (Article art : uniqueArticles) {
@@ -243,6 +230,7 @@ public class Tema1 {
 		}
 		pw.close();
 
+		// Generate per-category output files
 		Set<Map.Entry<String, List<String>>> entrySet = mapCatIndices.entrySet();
 		for (Map.Entry<String, List<String>> entry : entrySet) {
 			String category = entry.getKey();
@@ -254,7 +242,7 @@ public class Tema1 {
 
 			PrintWriter pw2 = new PrintWriter(category + ".txt");
 
-			Collections.sort(listUuids); // implicit sortarea aici va fi lexicografica.
+			Collections.sort(listUuids); // Default lexicographical sort by UUID
 			for (String uuid : listUuids) {
 				pw2.println(uuid);
 			}
@@ -267,7 +255,7 @@ public class Tema1 {
 				PrintWriter pw3 = new PrintWriter(entryLang.getKey() + ".txt");
 				List<String> listLangUuids = entryLang.getValue();
 
-				Collections.sort(listLangUuids); // lexicografic uuid-urile
+				Collections.sort(listLangUuids); // Generate per-language output files
 				for (String listLangUuid : listLangUuids) {
 					pw3.println(listLangUuid);
 				}
@@ -277,9 +265,7 @@ public class Tema1 {
 
 		PrintWriter pw4 = new PrintWriter("keywords_count.txt");
 		List<Map.Entry<String, Integer>> listKeyWordsFreq = new ArrayList<>(keywordCount.entrySet());
-		// prima data vreau sa compar in functie de valoare (nr de aparitii al acelui keyword, intai
-		// cele cu acest numar mai mare, apoi in caz de egalitate,
-		// voi lua lexicografic care keyword e mai "mic" lexicografic, va intra primul in lista sortata.
+		// Generate keywords_count.txt: sorted by frequency descending, then lexicographically
 		listKeyWordsFreq.sort(new tema.apd.MyComparatorKewords());
 
 		for (Map.Entry<String, Integer> entry : listKeyWordsFreq) {
@@ -287,9 +273,7 @@ public class Tema1 {
 		}
 		pw4.close();
 
-
-		// pentru rapoarte
-		// count unicate/ duplicate, cel mai tare autor, limba de top etc etc
+		// Output reports.txt with global aggregated metrics
 		PrintWriter pw5 = new PrintWriter("reports.txt");
 		pw5.println("duplicates_found - " + (allArticles.size() - uniqueArticles.size()));
 		pw5.println("unique_articles - " + uniqueArticles.size());
