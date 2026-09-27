@@ -5,16 +5,15 @@ out/
 *.iml
 .DS_Store
 
-# Exclude large datasets & checker outputs
-**/checker/input/articles/
+# Output & Logs
 **/checker/output/
-*.json
 *.zip
 *.log
 
-# Whitelist small test json files
-!checker/input/tests/test_small/*.json
-!**/articles_small_*.json
+# Allow all input dataset articles
+!checker/input/articles/*.json
+!checker/input/tests/**/*.json
+!**/articles_*.json
 
 # Generated output text files
 *.txt
