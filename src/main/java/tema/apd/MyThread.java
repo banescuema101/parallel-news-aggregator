@@ -15,7 +15,7 @@ import java.util.Vector;
 public class MyThread implements Runnable {
 	private int id;
 	private int P;
-	// structurile locale fiecarui thread
+	// thread-local data structures to avoid lock contention
 	private Map<String, List<String>> localCatMap;
 	private Map<String, List<String>> localLangMap;
 	private Map<String, Integer> localLanguageCount;
@@ -24,7 +24,8 @@ public class MyThread implements Runnable {
 
 	private Map<String,Integer> localUuidFreq;
 	private Map<String,Integer> localTitleFreq;
-	// constructor
+
+	// Constructor
 	public MyThread(int id, int nrThreads) {
 		this.id = id;
 		this.P = nrThreads;
@@ -35,7 +36,7 @@ public class MyThread implements Runnable {
 		this.localUuidFreq = new HashMap<>();
 		this.localTitleFreq = new HashMap<>();
 
-		// pentru jackson configures
+		// configure jackson object mapper to safely ignore unspecified attributes.
 		mapper = new ObjectMapper();
 		mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 	}
@@ -116,92 +117,86 @@ public class MyThread implements Runnable {
 	public void run() {
 		try {
 
-			// Varianta 1
-			// Ma gandisem ca daca am fisiere de dimeniune variata, ar fi mai bine sa fie procesate fisierele
-			// cate unul de fiecare thread: th 0 -> file-ul 0, th 1 -> files-ul 1, th 2 -> file-ul 2 s.a.s.m.d
-			// apoi ciclic, th[x%nrThreaduri] = file(x), unde x de la 0 -> size ul listei de fisiere.
-			// dar m-am gandit si la faptul ca ar cauza mult context switching, mai ales daca avem un numar mic de threaduri
-			// si multe multe fisiere, cu putine date in ele.
-
-			// asa ca am optat totusi pentru varianta clasica, cu range. Th0 -> o portiune din lista de fisiere
-			// si extragere de articole, th 1 alta portiune etc etc.
-
-			// Impartirea fiecarui thread cate un range de fisiere pentru a
-			// parsa articolele din ele.
-			int nrFiles = Tema1.jsonFilesStrings.size();
-			int startFiles = (int)(id * (double) nrFiles / P);
-			int endFiles = Math.min((id + 1) * nrFiles / P, nrFiles);
+			/*
+			 * Work Partitioning Strategy trade-off:
+			 *
+			 * Considered dynamic round-robin scheduling (Thread[i % P] -> File[i]) to mitigate potential load imbalance
+			 * caused by non-uniform JSON file sizes. However, with large batches of small files, cyclic allocation increases
+			 * thread context switching overhead and destroys CPU cache locality.
+			 *
+			 * Decided on static contiguous range partitioning: each thread processes a deterministic slice [start, end)
+			 * of the file list. This minimizes synchronization overhead, optimizes throughput, and scales linearly when
+			 * I/O latency dominates.
+			 */
+			int FilesCounter = NewsAggregator.jsonFilesStrings.size();
+			int startFiles = (int)(id * (double) FilesCounter / P);
+			int endFiles = Math.min((id + 1) * FilesCounter / P, FilesCounter);
 
 			for (int i = startFiles; i < endFiles; i++) {
-				File fd = new File(Tema1.jsonFilesStrings.get(i));
-				// daca e totul corect si exista undeva prin ierarhia proiectului:
+				File fd = new File(NewsAggregator.jsonFilesStrings.get(i));
 				if (fd.exists()) {
 					Article[] arr = mapper.readValue(fd, Article[].class);
 					for (Article art : arr) {
-						Tema1.allArticles.add(art);
+						NewsAggregator.allArticles.add(art);
 					}
 				}
 			}
-			// astept ca toate articolele sa se introduce in allArticles, de catre toate cele
-			// nrThreads threaduri.
-			Tema1.barrier.await();
+			// Synchronize threads: ensure all JSON articles are fully loaded into allArticles
+			NewsAggregator.barrier.await();
 
 
-			// pasul 2: eliminarea duplicatelor:
-			int nrArticles = Tema1.allArticles.size();
-			int start = (int)(id * (double) nrArticles / P);
-			int end = Math.min((id + 1) * nrArticles / P, nrArticles);
+			// Phase 2: Duplicate detection and collision counting
+			int ArticlesCounter = NewsAggregator.allArticles.size();
+			int start = (int)(id * (double) ArticlesCounter / P);
+			int end = Math.min((id + 1) * ArticlesCounter / P, ArticlesCounter);
 
 
 			for (int i = start; i < end; i++) {
-				Article currArticle = Tema1.allArticles.get(i);
-				// aici voi updata frecventele pt uuid si title in concurrent hashmap-urile mele:
+				Article currArticle = NewsAggregator.allArticles.get(i);
+				// Update local frequencies for UUID and Title
 				localUuidFreq.put(currArticle.getUuid(), localUuidFreq.getOrDefault(currArticle.getUuid(), 0) + 1);
 				localTitleFreq.put(currArticle.getTitle(), localTitleFreq.getOrDefault(currArticle.getTitle(), 0) + 1);
 			}
-			Tema1.barrier.await();
+			NewsAggregator.barrier.await();
 
-			// le incorporez si in hashMap-urile aferente, globale din Tema1.
+			// Atomically merge local frequency maps into global concurrent tables
 			for (Map.Entry<String, Integer> entry : localUuidFreq.entrySet()) {
-				Tema1.uuidFreq.merge(entry.getKey(), entry.getValue(), Integer::sum);
+				NewsAggregator.uuidFreq.merge(entry.getKey(), entry.getValue(), Integer::sum);
 			}
 
 			for (Map.Entry<String, Integer> entry : localTitleFreq.entrySet()) {
-				Tema1.titlesFreq.merge(entry.getKey(), entry.getValue(), Integer::sum);
+				NewsAggregator.titlesFreq.merge(entry.getKey(), entry.getValue(), Integer::sum);
 			}
-			Tema1.barrier.await();
+			NewsAggregator.barrier.await();
 
-			// acum extrag articolele unice in lista Tema1.uniqueArticles. Fiecare thread
-			// parcurge o portiune din toate articolele, verifica conditia de unicitate,
-			// si adauga in lista uniqueArticles, care e lista synchronizedList
+			// Filter out duplicate articles into Tema1.uniqueArticle
 			for (int i = start; i < end; i++) {
-				Article currArticle = Tema1.allArticles.get(i);
-				if (Tema1.uuidFreq.get(currArticle.getUuid()) == 1 && Tema1.titlesFreq.get(currArticle.getTitle()) == 1) {
-					Tema1.uniqueArticles.add(currArticle);
+				Article currArticle = NewsAggregator.allArticles.get(i);
+				if (NewsAggregator.uuidFreq.get(currArticle.getUuid()) == 1 && NewsAggregator.titlesFreq.get(currArticle.getTitle()) == 1) {
+					NewsAggregator.uniqueArticles.add(currArticle);
 				}
 			}
 
-			Tema1.barrier.await();
+			NewsAggregator.barrier.await();
 
-			int nrUniqueArticles = Tema1.uniqueArticles.size();
-			int newStart = (int)(id * (double) nrUniqueArticles / P);
-			int newEnd = Math.min((id + 1) * nrUniqueArticles / P, nrUniqueArticles);
+			// Phase 3: Metadata indexing and statistics tracking on unique articles
+			int uniqueArticlesCount = NewsAggregator.uniqueArticles.size();
+			int newStart = (int)(id * (double) uniqueArticlesCount / P);
+			int newEnd = Math.min((id + 1) * uniqueArticlesCount / P, uniqueArticlesCount);
 
 
-			// Aflarea celui mai recent publicat, articol:
 			Article localRecentArticle = null;
 
 			for (int i = newStart; i < newEnd; i++) {
-				Article currArticle = Tema1.uniqueArticles.get(i);
+				Article currArticle = NewsAggregator.uniqueArticles.get(i);
 				List<String> artCategoriesList = currArticle.getCategories();
 				if (artCategoriesList == null) {
 					continue;
 				}
-				// pun lista de categori intr-un set, pentru ca am observat ca pt acelasi articol,
-				// se pot repeta categoriile ex: Human Interest, de doua ori intr-un .json...
+				// Deduplicate categories within the same article to avoid duplicate counts
 				Set<String> categories = new HashSet<>(artCategoriesList);
 				for (String category : categories) {
-					if (Tema1.setCategories.contains(category) && category != null && currArticle.getUuid() != null)
+					if (NewsAggregator.setCategories.contains(category) && category != null && currArticle.getUuid() != null)
 					{
 						localCatMap.putIfAbsent(category, new ArrayList<>());
 						localCatMap.get(category).add(currArticle.getUuid());
@@ -210,24 +205,24 @@ public class MyThread implements Runnable {
 					}
 				}
 
-				// limba -> nrArticole, logica locala apoi merge in hashMap-ul global.
+				// Map valid languages and increment article occurrence
 				String artLanguage = currArticle.getLanguage();
-				if (artLanguage != null && Tema1.setLanguages.contains(artLanguage)) {
+				if (artLanguage != null && NewsAggregator.setLanguages.contains(artLanguage)) {
 					localLangMap.putIfAbsent(artLanguage, new ArrayList<>());
 					localLangMap.get(artLanguage).add(currArticle.getUuid());
 
 					localLanguageCount.put(artLanguage, localLanguageCount.getOrDefault(artLanguage, 0) + 1);
 				}
-				// mapez si autorul, si contorizez la numarul de articole scrise de acesta.
+				// Track author publication counts globally
 				String author = currArticle.getAuthor();
-				Tema1.mapAuthorNr.merge(author, 1, (a, b) -> a + 1);
+				NewsAggregator.mapAuthorNr.merge(author, 1, (a, b) -> a + 1);
 
 
-				// pentru a retine articolul cel mai recent (local)
+				// Track the thread-local most recent article
 				if (localRecentArticle == null) {
 					localRecentArticle = currArticle;
 				} else {
-					// comparator, dupa timestampul publicarii, lexicografic, ca sunt Stringuri
+					// Compare published timestamps lexicographically; break ties using UUID
 					int cmpVal = currArticle.getPublished().compareTo(localRecentArticle.getPublished());
 					if (cmpVal > 0) {
 						localRecentArticle = currArticle;
@@ -241,52 +236,49 @@ public class MyThread implements Runnable {
 			}
 
 			if (localRecentArticle != null) {
-				// acum ca am cel mai recent articol, dar local din cele procesate de acest thread curent,
-				// voi incerca sa actualizez cel mai recent articol, si la nivel global.
-				synchronized (Tema1.mostRecentArticleLock) {
-					if (Tema1.mostRecentArticle == null) {
-						Tema1.mostRecentArticle = localRecentArticle;
+				// Synchronize and update the globally tracked most recent article
+				synchronized (NewsAggregator.mostRecentArticleLock) {
+					if (NewsAggregator.mostRecentArticle == null) {
+						NewsAggregator.mostRecentArticle = localRecentArticle;
 					} else {
-						int cmpVal = localRecentArticle.getPublished().compareTo(Tema1.mostRecentArticle.getPublished());
+						int cmpVal = localRecentArticle.getPublished().compareTo(NewsAggregator.mostRecentArticle.getPublished());
 						if (cmpVal > 0) {
-							Tema1.mostRecentArticle = localRecentArticle;
+							NewsAggregator.mostRecentArticle = localRecentArticle;
 						} else if (cmpVal == 0) {
-							// in caz de egalitate, ma uit si eu dupa uuid, dupa cum se specifica in cerinta, si ii dau prioritate
-							// sa ia locul de mostRecentArticle cel mai mic lexicografic.
-							if (localRecentArticle.getUuid().compareTo(Tema1.mostRecentArticle.getUuid()) < 0) {
-								Tema1.mostRecentArticle = localRecentArticle;
+							// On timestamp ties, prioritize smaller UUID lexicographically
+							if (localRecentArticle.getUuid().compareTo(NewsAggregator.mostRecentArticle.getUuid()) < 0) {
+								NewsAggregator.mostRecentArticle = localRecentArticle;
 							}
 						}
 					}
 				}
 			}
 
-			// merge-uri in hashMap-urile locale. categorie -> lista de uuids
+			// Merge local category mappings: Category -> List of UUIDs
 			for (Map.Entry<String, List<String>> entry : localCatMap.entrySet()) {
-				Tema1.mapCatIndices.computeIfAbsent(entry.getKey(), k -> new Vector<>()).addAll(entry.getValue());
+				NewsAggregator.mapCatIndices.computeIfAbsent(entry.getKey(), k -> new Vector<>()).addAll(entry.getValue());
 			}
 
-			// limba -> lista de uuids
+			// Merge local language mappings: Language -> List of UUIDs
 			for (Map.Entry<String, List<String>> entry : localLangMap.entrySet()) {
-				Tema1.mapLimbiIndices.computeIfAbsent(entry.getKey(), k -> new Vector<>()).addAll(entry.getValue());
+				NewsAggregator.mapLimbiIndices.computeIfAbsent(entry.getKey(), k -> new Vector<>()).addAll(entry.getValue());
 			}
 
-			// populez hashMap-ul in care am mapat categoriile -> nrArticole din ele, din Tema1.
+			// Populate global category counts
 			for (Map.Entry<String, Integer> entry : localCategoryCount.entrySet()) {
-				Tema1.mapCatCounts.merge(entry.getKey(), entry.getValue(), Integer::sum);
+				NewsAggregator.mapCatCounts.merge(entry.getKey(), entry.getValue(), Integer::sum);
 			}
 
-			// aici voi popula structura din Tema1, mapLangCounts, cea globala.
+			// Populate global language counts
 			for (Map.Entry<String, Integer> entry : localLanguageCount.entrySet()) {
-				Tema1.mapLangCounts.merge(entry.getKey(), entry.getValue(), Integer::sum);
+				NewsAggregator.mapLangCounts.merge(entry.getKey(), entry.getValue(), Integer::sum);
 			}
 
 
 
-			// Pasul 4 -> Cuvinte de interes in engleza: ( aici sunt cu articole unice, de la newStart pana
-			// la newEnd.
+			// Phase 4: English keyword frequency profiling
 			for (int i = newStart; i < newEnd; i++) {
-				Article currArticle = Tema1.uniqueArticles.get(i);
+				Article currArticle = NewsAggregator.uniqueArticles.get(i);
 				if (!"english".equals(currArticle.getLanguage())) {
 					continue;
 				}
@@ -296,44 +288,37 @@ public class MyThread implements Runnable {
 				String lowerText = currArticle.getText().toLowerCase();
 				String[] textParts = lowerText.split("\\s+");
 
-				// Vreau sa retin cuvintele gasite, intr-un set,
-				// Ca sa evit contorizarea kewWord-urilor de 2 sau de mai multe ori.
+				// Track words locally per article to count distinct occurrences once
 				Set<String> setKeyWords = new HashSet<>();
 				for (String word : textParts) {
-					// elimin orice nu este litera
+					// Strip all non-letter characters
 					String wordNonLetRemoval = word.replaceAll("[^a-z]", "");
 					if (wordNonLetRemoval.isEmpty())
 						continue;
 
-					// daca e in setul de cuvinte de legatura pe care trebuie sa le ignor, le ignor.
-					if (Tema1.setlinkingWords.contains(wordNonLetRemoval)) {
+					// Ignore linking words
+					if (NewsAggregator.setlinkingWords.contains(wordNonLetRemoval)) {
 						continue;
 					}
 					if (setKeyWords.contains(wordNonLetRemoval)) {
-						// inseamna ca l-am mai vazut in acest articol, si i-am crescut
-						// deja frecventa de aparitie in cadrul articolelor.
 						continue;
 					}
 
-					// altfel, adaug in setul keyword-urilor si ii scresc frecventa (counterul)
+					// Add to processed set and increment distinct article frequency
 					setKeyWords.add(wordNonLetRemoval);
-					Tema1.keywordCount.merge(wordNonLetRemoval, 1, (a, b) -> a + 1);
+					NewsAggregator.keywordCount.merge(wordNonLetRemoval, 1, (a, b) -> a + 1);
 
 				}
 			}
-			Tema1.barrier.await();
+			NewsAggregator.barrier.await();
 
 
-			// am ales eu jobul cu calculul statisticilor -
-			// folosindu-se de structurile globale populate de threaduri
-			// dupa etapele de mai sus - sa il faca threadul cu id-ul 0.
+			// Phase 5: Thread 0 computes aggregate statistics and writes output files
 			if (id == 0) {
-				// partea de rapoarte:
-
-				// 1) pentru cel mai bun autor:
+				// 1) Compute best author (most articles written; alphabetical tie-breaker
 				String nameBestAuthor = "";
 				int maxNrAuthArticles = -1;
-				Set<Map.Entry<String, Integer>> bestAuthorSet = Tema1.mapAuthorNr.entrySet();
+				Set<Map.Entry<String, Integer>> bestAuthorSet = NewsAggregator.mapAuthorNr.entrySet();
 				for (Map.Entry<String, Integer> entry : bestAuthorSet) {
 					String currAuthor = entry.getKey();
 					int nrArticlesWritten = entry.getValue();
@@ -343,59 +328,59 @@ public class MyThread implements Runnable {
 					} else if (nrArticlesWritten == maxNrAuthArticles) {
 						if (nameBestAuthor == null || currAuthor.compareTo(nameBestAuthor) < 0) {
 							nameBestAuthor = currAuthor;
-							// lexicografic dupa nume, in caz caz ca ar coincide ca nr de articole scrise.
+
 						}
 					}
 				}
-				Tema1.nameBestAuthor = nameBestAuthor;
-				Tema1.bestAuthorCount = maxNrAuthArticles;
+				NewsAggregator.nameBestAuthor = nameBestAuthor;
+				NewsAggregator.bestAuthorCount = maxNrAuthArticles;
 
-				// 2) pentru topLanguage;
+				// 2) Compute top language
 				String topLanguage = "";
-				int maxLangNr = -1;
+				int maxLangCounter = -1;
 
-				for (Map.Entry<String, Integer> entry : Tema1.mapLangCounts.entrySet()) {
+				for (Map.Entry<String, Integer> entry : NewsAggregator.mapLangCounts.entrySet()) {
 					String currLang = entry.getKey();
-					int nrArticlesLang = entry.getValue();
-					if (nrArticlesLang > maxLangNr) {
-						maxLangNr = nrArticlesLang;
+					int ArticlesLangCounter = entry.getValue();
+					if (ArticlesLangCounter > maxLangCounter) {
+						maxLangCounter = ArticlesLangCounter;
 						topLanguage = currLang;
-					} else if (nrArticlesLang == maxLangNr) {
+					} else if (ArticlesLangCounter == maxLangCounter) {
 						if (topLanguage == null || currLang.compareTo(topLanguage) < 0) {
 							topLanguage = currLang;
 						}
 					}
 				}
-				Tema1.topLanguage = topLanguage;
-				Tema1.topLanguageCount = maxLangNr;
+				NewsAggregator.topLanguage = topLanguage;
+				NewsAggregator.topLanguageCount = maxLangCounter;
 
 
-				// 3) categoria cu cele mai multe articole pe acea categorie.
+				// 3) Compute top category with character normalization
 				String topCategory = "";
-				int maxCatNr = -1;
-				for (Map.Entry<String, Integer> entry : Tema1.mapCatCounts.entrySet()) {
+				int maxCategories = -1;
+				for (Map.Entry<String, Integer> entry : NewsAggregator.mapCatCounts.entrySet()) {
 					String currCat = entry.getKey();
 					int nrArticlesCat = entry.getValue();
 
-					if (nrArticlesCat > maxCatNr) {
-						maxCatNr = nrArticlesCat;
+					if (nrArticlesCat > maxCategories) {
+						maxCategories = nrArticlesCat;
 						topCategory = currCat;
-					} else if (nrArticlesCat == maxCatNr) {
+					} else if (nrArticlesCat == maxCategories) {
 						if (topCategory == null || currCat.compareTo(topCategory) < 0) {
 							topCategory = currCat;
 						}
 					}
 				}
-				// acele specificatii din enunt in care virgulele le elimin si spatiile le inlocuiesc cu _
+				// Normalize category name: strip commas and replace spaces with underscores
 				String topCategoryNormalized = topCategory.replaceAll(",", "");
 				topCategoryNormalized = topCategoryNormalized.replaceAll(" ", "_");
-				Tema1.topCategory = topCategoryNormalized;
-				Tema1.topCategoryCount = maxCatNr;
+				NewsAggregator.topCategory = topCategoryNormalized;
+				NewsAggregator.topCategoryCount = maxCategories;
 
-				// 4) pentru most recent article -> am deja maximul acela global in Tema1.mostRecentArticle.
+				// 4) Compute top English keyword (highest frequency; lexicographical tie-breaker)
 				String topKeyWord = "";
 				int maxKeyWordNr = -1;
-				for (Map.Entry<String, Integer> entry : Tema1.keywordCount.entrySet()) {
+				for (Map.Entry<String, Integer> entry : NewsAggregator.keywordCount.entrySet()) {
 					String wordKey = entry.getKey();
 					int freqArt = entry.getValue();
 					if (freqArt > maxKeyWordNr) {
@@ -407,10 +392,10 @@ public class MyThread implements Runnable {
 						}
 					}
 				}
-				Tema1.topKeyWord = topKeyWord;
-				Tema1.topKeyWordCount = maxKeyWordNr;
+				NewsAggregator.topKeyWord = topKeyWord;
+				NewsAggregator.topKeyWordCount = maxKeyWordNr;
 
-				Tema1.scriereRezultate();
+				NewsAggregator.writeResult();
 			}
 
 		} catch (Exception e) {

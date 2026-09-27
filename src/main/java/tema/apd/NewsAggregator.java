@@ -44,7 +44,7 @@ class MyComparatorKewords implements Comparator<Map.Entry<String, Integer>> {
 }
 
 
-public class Tema1 {
+public class NewsAggregator {
 	// Global variables across all worker threads where local results that maximize
 	// global metrics are merged - thread 0 merges and finalizes them.
 	public static String nameBestAuthor;
@@ -78,7 +78,7 @@ public class Tema1 {
 	final static ConcurrentHashMap<String, Integer> keywordCount = new ConcurrentHashMap<>();
 
 	// Article mappings: Language -> List of Article UUIDs
-	static ConcurrentHashMap<String, List<String>> mapLimbiIndices = new ConcurrentHashMap<>();
+	static ConcurrentHashMap<String, List<String>> mapLanguagesIndices = new ConcurrentHashMap<>();
 	// Article mappings: Category -> List of Article UUIDs
 	static ConcurrentHashMap<String, List<String>> mapCatIndices = new ConcurrentHashMap<>();
 
@@ -103,7 +103,7 @@ public class Tema1 {
 
 		// Parse file paths and filter lists on the main thread
 		jsonFilesStrings = parsareFileNamesArticles(articlesTxt);
-		citireFisierInputs(inputsTxt);
+		readInputFile(inputsTxt);
 
 		barrier = new CyclicBarrier(nrThreads);
 
@@ -159,7 +159,7 @@ public class Tema1 {
 
 	// Loads elements into a concurrent set to achieve O(1) membership lookups,
 	// ignoring ordering.
-	static Set<String> creeazaSet(String file) throws Exception{
+	static Set<String> createSet(String file) throws Exception{
 		BufferedReader br = new BufferedReader(new FileReader(file));
 		int n = Integer.parseInt(br.readLine().trim());
 
@@ -180,7 +180,7 @@ public class Tema1 {
 	//
 	// Each target file is read line-by-line and stored into sets.
 	// Provides O(1) lookups in worker threads to validate categories, languages, and linking words
-	static void citireFisierInputs(String inputsFileTxt) throws Exception{
+	static void readInputFile(String inputsFileTxt) throws Exception{
 		File fileInput = new File(inputsFileTxt);
 		String parentDir = fileInput.getParent();
 		BufferedReader br = new BufferedReader(new FileReader(fileInput));
@@ -206,9 +206,9 @@ public class Tema1 {
 		}
 
 		// Populate lookup sets
-		setLanguages = creeazaSet(completeLangFilePath.getPath());
-		setCategories = creeazaSet(completeCatFilePath.getPath());
-		setlinkingWords = creeazaSet(completeWordsFilePath.getPath());
+		setLanguages = createSet(completeLangFilePath.getPath());
+		setCategories = createSet(completeCatFilePath.getPath());
+		setlinkingWords = createSet(completeWordsFilePath.getPath());
 
 		Set<String> cleanedWords = ConcurrentHashMap.newKeySet();
 		for (String w : setlinkingWords) {
@@ -220,7 +220,7 @@ public class Tema1 {
 		br.close();
 	}
 
-	static void scriereRezultate() throws Exception {
+	static void writeResult() throws Exception {
 		// Sort unique articles chronologically descending, falling back to UUID lexicographical order
 		uniqueArticles.sort(new tema.apd.MyComparator());
 		PrintWriter pw = new PrintWriter("all_articles.txt");
@@ -249,7 +249,7 @@ public class Tema1 {
 			pw2.close();
 		}
 
-		List<Map.Entry<String, List<String>>> listLanguageMap = new ArrayList<>(mapLimbiIndices.entrySet());
+		List<Map.Entry<String, List<String>>> listLanguageMap = new ArrayList<>(mapLanguagesIndices.entrySet());
 		for (Map.Entry<String, List<String>> entryLang : listLanguageMap) {
 			if (setLanguages.contains(entryLang.getKey())) {
 				PrintWriter pw3 = new PrintWriter(entryLang.getKey() + ".txt");

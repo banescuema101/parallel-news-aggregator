@@ -2,9 +2,11 @@ package tema.apd;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.List;
 
-// clasa pentru reprezentarea unui articol. Mai jos am inclus momentan
-// doar campurile obligatorii pt procesare. Pentru ca am vazut ca fisierele json din setul de date
-// au extrem de multe atribute, campuri pe care nu e necesar sa le folosesc in cadrul temei.
+/**
+ * Data model representing a news article.
+ * Contains only the required schema fields for ingestion and downstream analytics
+ * Ignores any extra metadata attributes present in the raw Webz.io JSON records.
+ */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class Article {
 	private String uuid;
