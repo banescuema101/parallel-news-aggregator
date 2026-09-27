@@ -84,13 +84,14 @@ Benchmarks were executed under WSL2 on an 8-core host machine:
 | **Java Runtime** | OpenJDK 11.0.29 (64-Bit Server VM, build 11.0.29+7) |
 
 ### Dataset & Scalability Benchmarks
+
 The engine was benchmarked on multi-threaded workloads processing raw multilingual news corpora:
 - **Sanity Datasets (`test_1` – `test_4`):** Functional correctness, language filtering, and edge cases.
-- **Large-Scale Corpus (`test_5`):** **10,000+ distinct JSON articles** (~300 MB corpus) processed concurrently across worker thread pools.
-
-* **Source:** Derived from the [Webhose / Webz.io Free News Dataset](https://github.com/Webhose/free-news-datasets).
-* **Benchmark Target:** Evaluated using the largest test fixture to measure real-world I/O throughput and thread contention over representative payloads.
+- **Large-Scale Corpus (`test_5`):** **13,790 distinct JSON articles (~458 MB corpus)** processed concurrently across worker thread pools.
+- **Source:** Derived from the Webhose / Webz.io Free News Dataset.
+- **Benchmark Target:** Evaluated using the largest test fixture (`test_5`) to measure real-world I/O throughput, synchronization overhead, and thread contention over representative payloads.
 ---
+
 
 ### 2. Empirical Benchmark Results
 
